@@ -24,6 +24,7 @@ class Actions(enum.Enum):
     UP = 2
     DOWN = 3
     STAY = 4
+    START = 5
 
 valid_move_tiles = {TileType.EMPTY.value, TileType.FOOD_SOURCE.value, TileType.FOOD.value}
 
@@ -72,7 +73,7 @@ class FoodSources:
 
 class GridMazeWorld(gym.Env):
     def __init__(self, max_age=100, grid_size=12, obstacle_count=14, food_source_count=4,
-                 food_generate_time_average=11, food_energy=12, initial_energy=20, max_energy=40):
+                 food_generate_time_average=11, food_energy=12, initial_energy=20, max_energy=40, name="something"):
         super(GridMazeWorld, self).__init__()
 
         self.max_age = max_age
@@ -83,6 +84,7 @@ class GridMazeWorld(gym.Env):
         self.initial_energy = initial_energy
         self.max_energy = max_energy
         self.food_generate_time_average = food_generate_time_average
+        self.name = name
 
         self.tile_characters = [" ", "█", "X", "☺", "O"]
         self.tile_colors = [(32, 32, 32), (128, 128, 128), (255, 0, 0), (0, 255, 0), (0, 0, 255)]
@@ -99,7 +101,7 @@ class GridMazeWorld(gym.Env):
 
         # initial position is a random empty tile
         self.posX, self.posY = None, None
-        self.last_action = Actions.STAY.value
+        self.last_action = Actions.START.value
 
         self.energy = 0
         self.age = 0
@@ -111,7 +113,7 @@ class GridMazeWorld(gym.Env):
         self.reset()
 
     def max_observation_value(self):
-        return len(TileType) + len(Actions) + 5
+        return len(TileType) + len(Actions) + 6
 
     def get_observation_size(self):
         return 10
@@ -142,34 +144,31 @@ class GridMazeWorld(gym.Env):
 
         self.maze_grid = self.add_obstacles(self.maze_grid)
 
+        self.died = False
         self.age = 0
         self.energy = self.initial_energy
-        self.last_action = Actions.STAY.value
+        self.last_action = Actions.START.value
 
-        return self._create_observation()
+        return self.step(Actions.START.value)
 
     def step(self, action: int):
         if self.died:
             return self._create_observation(), 0, True, {}
 
-        self.last_action = action
-
-        if action == Actions.LEFT.value:
-            x = max(0, self.posX - 1)
-            if self.maze_grid[self.posY, x] in valid_move_tiles:
-                self.posX = x
-        elif action == Actions.RIGHT.value:
-            x = min(self.maze_grid.shape[1] - 1, self.posX + 1)
-            if self.maze_grid[self.posY, x] == 0:
-                self.posX = x
-        elif action == Actions.UP.value:
-            y = max(0, self.posY - 1)
-            if self.maze_grid[y, self.posX] == 0:
-                self.posY = y
-        elif action == Actions.DOWN.value:
-            y = min(self.maze_grid.shape[0] - 1, self.posY + 1)
-            if self.maze_grid[y, self.posX] == 0:
-                self.posY = y
+        if action == Actions.LEFT.value and self.maze_grid[self.posY, self.posX - 1] == TileType.EMPTY.value:
+            self.posX = self.posX - 1
+            self.last_action = Actions.LEFT.value
+        elif action == Actions.RIGHT.value and self.maze_grid[self.posY, self.posX + 1] == TileType.EMPTY.value:
+            self.posX = self.posX + 1
+            self.last_action = Actions.RIGHT.value
+        elif action == Actions.UP.value and self.maze_grid[self.posY - 1, self.posX] == TileType.EMPTY.value:
+            self.posY = self.posY - 1
+            self.last_action = Actions.UP.value
+        elif action == Actions.DOWN.value and self.maze_grid[self.posY + 1, self.posX] == TileType.EMPTY.value:
+            self.posY = self.posY + 1
+            self.last_action = Actions.DOWN.value
+        else:
+            self.last_action = Actions.STAY.value
 
         food_energy = self.food_source.step(self.posY, self.posX)
         self.energy += food_energy - 1
@@ -191,7 +190,7 @@ class GridMazeWorld(gym.Env):
 
         maze_grid_observations = [maze_grid[self.posY + dy, self.posX + dx] for dy, dx in self.neighborhood]
         maze_grid_observations.append(len(TileType) + self.last_action)
-        maze_grid_observations.append(len(TileType) + len(Actions), int(self.energy * 5 / self.max_energy))
+        maze_grid_observations.append(len(TileType) + len(Actions) + int(self.energy * 5 / self.max_energy))
         return maze_grid_observations
 
     def add_obstacles(self, maze_grid: np.ndarray) -> np.ndarray:
@@ -237,22 +236,30 @@ class GridMazeWorld(gym.Env):
 
 
 if __name__ == '__main__':
-    max_age = 200
+    max_age = 100
+    obstacle_fraction = 0.33
+    grid_size = 11
+    obstacle_count = (grid_size - 2) * (grid_size - 2) * obstacle_fraction
+    food_source_count = 10
+    food_energy = 10
+    initial_energy = 20
+
     env = GridMazeWorld(
         max_age=max_age,
-        grid_size=16,
-        obstacle_count=60,
-        food_source_count=16,
-        food_energy=12,
-        initial_energy=200,
+        grid_size=grid_size,
+        obstacle_count=obstacle_count,
+        food_source_count=food_source_count,
+        food_energy=food_energy,
+        initial_energy=initial_energy,
     )
+    cv2.namedWindow('env', cv2.WINDOW_NORMAL)
     for i in tqdm(range(1000)):
         env.reset()
         for _ in range(max_age):
             action = env.action_space.sample()
             obs, reward, done, info = env.step(action)
-            #if done:
-            #    break
+            if done:
+                break
             #print(f"Action: {action}, Obs: {obs}, Reward: {reward}, Done: {done}")
             #cv2.imshow('env', env.render(mode=''))
             #cv2.waitKey(0)
