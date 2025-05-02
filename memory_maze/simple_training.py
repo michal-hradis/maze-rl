@@ -36,6 +36,36 @@ class AttnAggregator(nn.Module):
         return pooled
 
 
+class ConcatMLPAggregator(nn.Module):
+    """
+    ConcatMLP-style pooling that turns a set of token embeddings
+    E ∈ ℝ^{B×T×K×D}  (B=batch, T=seq, K=observation_size, D=emb dim)
+    into a single vector per observation:  ℝ^{B×T×D}.
+
+    D - embed_dim
+    K - embed_count
+    """
+    def __init__(self, embed_dim: int, embed_count: int):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.embed_count = embed_count
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim * embed_count, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, embed_dim),
+            nn.ReLU()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [batch, seq, K, D]  →  x: [batch, seq, K*D]
+        x = x.view(x.shape[0], x.shape[1], -1)
+        # x: [batch, seq, K*D]  →  x: [batch, seq, D]
+        x = self.mlp(x)
+        return x
+
+
 class MemoryPolicyNet(nn.Module):
     """
     Recurrent policy with per‑observation attention pooling and positional encodings.
@@ -83,7 +113,7 @@ class MemoryPolicyNet(nn.Module):
         nn.init.normal_(self.pos_embed, mean=0.0, std=embed_dim ** -0.5)
 
         # Attention aggregator (K tokens → 1 vector)
-        self.aggregator = AttnAggregator(embed_dim)
+        self.aggregator = ConcatMLPAggregator(embed_dim, observation_size)
 
         # Temporal memory across the seq dimension
         self.lstm = nn.LSTM(
@@ -230,7 +260,7 @@ def main():
             print(f"Model saved at epoch {epoch}")
 
 
-def get_episodes(args, device, environments, net):
+def get_episodes(args, device, environments, net, show=False):
     observations = [env.reset()[0] for env in environments]
     observations = torch.tensor(observations, dtype=torch.long).to(device)
     # add dimension from [batch, K] to [batch, 1, K]
@@ -242,13 +272,21 @@ def get_episodes(args, device, environments, net):
     for i in range(args.max_age):
         episode_observations.append(observations)
         logits = net(observations).squeeze(1)  # [batch, 1, action_count]
-        sampled_actions = torch.multinomial(logits.softmax(dim=-1), num_samples=1)
-        sampled_actions = sampled_actions.squeeze(1)
+        if show:  # select argmax action
+            sampled_actions = logits.argmax(dim=-1)
+        else:
+            sampled_actions = torch.multinomial(logits.softmax(dim=-1), num_samples=1)
+            sampled_actions = sampled_actions.squeeze(1)
         episode_actions.append(sampled_actions)
 
         # Take action
         # observations are: obsservation_token_list, reward, done, info
         results = [env.step(action) for env, action in zip(environments, sampled_actions.cpu().numpy())]
+
+        if show:
+            for env in environments[:1]:
+                cv2.imshow(env.name, env.render(mode="image"))
+                cv2.waitKey(50)
 
         observations, rewards, dones, infos = zip(*results)
 
@@ -261,6 +299,8 @@ def get_episodes(args, device, environments, net):
         if all(dones):
             break
 
+    if show:
+        cv2.waitKey(500)
     return episode_actions, episode_observations, episode_rewards
 
 
