@@ -35,8 +35,8 @@ def main():
 
     observation_size = 10
     vocab_size      = 20
-    embed_dim       = 512
-    hidden_size     = 512
+    embed_dim       = 768
+    hidden_size     = 768
     action_count    = 8
 
     net = MemoryPolicyNet(
