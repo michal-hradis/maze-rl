@@ -15,6 +15,7 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=100000)
     parser.add_argument('--learning-rate', type=float, default=0.0005)
     parser.add_argument("--max-age", type=int, default=50)
+    parser.add_argument("--net-path", type=str, default="policy_epoch_100.pt")
     return parser.parse_args()
 
 
@@ -197,6 +198,10 @@ def main():
         vocab_size, embed_dim, observation_size,
         hidden_size, action_count
     )
+
+    if args.net_path:
+        checkpoint = torch.load(args.net_path)
+        net.load_state_dict(checkpoint)
 
     optimizer = torch.optim.Adam(net.parameters(), lr=args.learning_rate)
     criterion = nn.CrossEntropyLoss(reduction='none')
