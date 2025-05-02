@@ -2,6 +2,7 @@ import argparse
 import cv2
 
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from memory_maze import GridMazeWorld
@@ -172,64 +173,95 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net.to(device)
 
+    γ = 0.99  # discount
+    entropy_coef = 0.01
+    max_grad_norm = 1.0
+
+    save_interval = 100
 
     for epoch in range(10000):
         with torch.no_grad():
-            observations = [env.reset()[0] for env in environments]
-            observations = torch.tensor(observations, dtype=torch.long).to(device)
-            # add dimension from [batch, K] to [batch, 1, K]
-            observations = observations.unsqueeze(1)
-            net.reset_state()
-
-            episode_rewards = [0] * args.batch_size
-            episode_observations = []
-            episode_actions = []
-
-            for i in range(args.max_age):
-                episode_observations.append(observations)
-                logits = net(observations)   # [batch, seq, action_count]
-                logits = logits.squeeze(1)  # [batch, action_count]
-                sampled_actions = torch.multinomial(logits.softmax(dim=-1), num_samples=1)
-                sampled_actions = sampled_actions.squeeze(1)
-                episode_actions.append(sampled_actions)
-
-                # Take action
-                # observations are: obsservation_token_list, reward, done, info
-                results = [env.step(action.item()) for env, action in zip(environments, sampled_actions)]
-                for i, (obs, reward, done, info) in enumerate(results):
-                    episode_rewards[i] += reward
-
-                observations = [o[0] for o in results]
-                observations = torch.tensor(observations, dtype=torch.long)
-                observations = observations.unsqueeze(1).to(device)
-
-                #for env in environments:
-                #    cv2.imshow(env.name, env.render(mode=''))
-                #cv2.waitKey(1)
-
-                # Update rewards
-
-                # Check if episode is done
-                if all([done for _, _, done, _ in results]):
-                    break
+            episode_actions, episode_observations, episode_rewards = get_episodes(args, device, environments, net)
 
         episode_observations = torch.cat(episode_observations, dim=1).to(device)  # [batch, seq, K]
         episode_actions = torch.stack(episode_actions, dim=1).to(device)  # [batch, seq]
-        episode_rewards = torch.tensor(episode_rewards, dtype=torch.float).to(device)
+        episode_rewards = torch.tensor(episode_rewards, dtype=torch.float).to(device).permute(1, 0)  # [batch, seq]
 
-        # Compute loss - I hope this is correct policy gradient learning
         net.reset_state()
         logits = net(episode_observations)
-        loss = criterion(logits.permute(0, 2, 1), episode_actions)
-        loss = loss.mean(dim=1)
-        loss = loss * episode_rewards
-        loss = loss.mean()
-        optimizer.zero_grad()
+
+        log_probs = F.log_softmax(logits, dim=-1)  # [B, T, A]
+        act_log_probs = log_probs.gather(-1, episode_actions.unsqueeze(-1)).squeeze(-1)  # [B, T]
+
+        with torch.no_grad():
+            B, T = episode_rewards.shape
+            returns = torch.zeros_like(episode_rewards)
+            running = torch.zeros(B, device=device)
+            for t in reversed(range(T)):
+                running = episode_rewards[:, t] + γ * running
+                returns[:, t] = running
+
+            # Simple baseline: mean return per trajectory
+            baseline = returns.mean(dim=1, keepdim=True)  # [B, 1]
+            advantages = returns - baseline  # [B, T]
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        policy_loss = -(act_log_probs * advantages.detach()).mean()
+
+        entropy = -(log_probs.exp() * log_probs).sum(-1).mean()
+        entropy_loss = -entropy_coef * entropy
+
+        loss = policy_loss + entropy_loss
+
+        # 7. Optimise
+        optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), max_grad_norm)
         optimizer.step()
 
-        print(f"Epoch: {epoch}, Average reward: {episode_rewards.mean():.2f}")
+        average_rewards = episode_rewards.sum(1).mean().item()
+        alive_lengths = (episode_rewards > 0).sum(1).float().mean()
 
+        print(f"Epoch: {epoch}, Average reward: {average_rewards:.2f}, Live: {alive_lengths:.2f}, "
+              f"Policy loss: {policy_loss.item():.4f}, Entropy loss: {entropy_loss.item():.4f}")
+
+        if epoch % save_interval == 0:
+            torch.save(net.state_dict(), f"policy_epoch_{epoch}.pt")
+            print(f"Model saved at epoch {epoch}")
+
+
+def get_episodes(args, device, environments, net):
+    observations = [env.reset()[0] for env in environments]
+    observations = torch.tensor(observations, dtype=torch.long).to(device)
+    # add dimension from [batch, K] to [batch, 1, K]
+    observations = observations.unsqueeze(1)
+    net.reset_state()
+    episode_rewards = []
+    episode_observations = []
+    episode_actions = []
+    for i in range(args.max_age):
+        episode_observations.append(observations)
+        logits = net(observations).squeeze(1)  # [batch, 1, action_count]
+        sampled_actions = torch.multinomial(logits.softmax(dim=-1), num_samples=1)
+        sampled_actions = sampled_actions.squeeze(1)
+        episode_actions.append(sampled_actions)
+
+        # Take action
+        # observations are: obsservation_token_list, reward, done, info
+        results = [env.step(action) for env, action in zip(environments, sampled_actions.cpu().numpy())]
+
+        observations, rewards, dones, infos = zip(*results)
+
+        episode_rewards.append(rewards)
+
+        observations = torch.tensor(observations, dtype=torch.long)
+        observations = observations.unsqueeze(1).to(device)
+
+        # Check if episode is done
+        if all(dones):
+            break
+
+    return episode_actions, episode_observations, episode_rewards
 
 
 if __name__ == "__main__":
