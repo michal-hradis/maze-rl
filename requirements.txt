@@ -1,0 +1,6 @@
+numba
+gym
+scikit-image
+opencv-python
+stable_baselines3
+torch
