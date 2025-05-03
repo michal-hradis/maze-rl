@@ -178,7 +178,7 @@ def main():
     obstacle_fraction = 0.3
     grid_size = 11
     obstacle_count = (grid_size - 2) * (grid_size - 2) * obstacle_fraction
-    food_source_count = 8
+    food_source_count = 6
     food_energy = 10
     initial_energy = 20
 
