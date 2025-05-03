@@ -287,7 +287,7 @@ def main():
               f"Policy loss: {policy_loss.item():.4f}, Entropy loss: {entropy_loss.item():.4f}")
 
         if epoch % save_interval == 0:
-            torch.save(net.state_dict(), f"policy_epoch_{epoch}.pt")
+            torch.save(net.state_dict(), f"policy_epoch_{epoch:06d}.pt")
             print(f"Model saved at epoch {epoch}")
 
 
