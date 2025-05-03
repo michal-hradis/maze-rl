@@ -1,4 +1,6 @@
 import argparse
+import copy
+
 import cv2
 
 import torch
@@ -16,6 +18,8 @@ def parse_args():
     parser.add_argument('--learning-rate', type=float, default=0.0005)
     parser.add_argument("--max-age", type=int, default=50)
     parser.add_argument("--net-path", type=str, default="policy_epoch_100.pt")
+    parser.add_argument("--env-group-size", type=int, default=1,
+                        help="Number of the same environments - used to reduce variance in training. Advantages are computed per group.")
     return parser.parse_args()
 
 
@@ -171,10 +175,10 @@ class MemoryPolicyNet(nn.Module):
 def main():
     args = parse_args()
 
-    obstacle_fraction = 0.25
+    obstacle_fraction = 0.3
     grid_size = 11
     obstacle_count = (grid_size - 2) * (grid_size - 2) * obstacle_fraction
-    food_source_count = 10
+    food_source_count = 8
     food_energy = 10
     initial_energy = 20
 
@@ -186,7 +190,7 @@ def main():
         food_energy=food_energy,
         initial_energy=initial_energy,
         name=str(i),
-    ) for i in range(args.batch_size)]
+    ) for i in range(args.batch_size * args.env_group_size)]
 
     observation_size = 10
     vocab_size      = 20
@@ -204,7 +208,6 @@ def main():
         net.load_state_dict(checkpoint)
 
     optimizer = torch.optim.Adam(net.parameters(), lr=args.learning_rate)
-    criterion = nn.CrossEntropyLoss(reduction='none')
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net.to(device)
 
@@ -216,7 +219,19 @@ def main():
 
     for epoch in range(10000):
         with torch.no_grad():
-            episode_actions, episode_observations, episode_rewards = get_episodes(args, device, environments, net)
+            # reset the environments
+            observations = [env.reset()[0] for env in environments]
+
+            final_environments = []
+            final_observations = []
+            for env, obs in zip(environments, observations):
+                for i in range(args.env_group_size):
+                    final_environments.append(copy.deepcopy(env))
+                    final_observations.append(obs)
+            final_observations = torch.tensor(final_observations, dtype=torch.long).to(device).unsqueeze(1)
+            net.reset_state()
+
+            episode_actions, episode_observations, episode_rewards = get_episodes(args, device, final_environments, final_observations, net)
 
         episode_observations = torch.cat(episode_observations, dim=1).to(device)  # [batch, seq, K]
         episode_actions = torch.stack(episode_actions, dim=1).to(device)  # [batch, seq]
@@ -228,6 +243,7 @@ def main():
         log_probs = F.log_softmax(logits, dim=-1)  # [B, T, A]
         act_log_probs = log_probs.gather(-1, episode_actions.unsqueeze(-1)).squeeze(-1)  # [B, T]
 
+        # 6. Compute the returns and advantages
         with torch.no_grad():
             B, T = episode_rewards.shape
             returns = torch.zeros_like(episode_rewards)
@@ -237,9 +253,19 @@ def main():
                 returns[:, t] = running
 
             # Simple baseline: mean return per trajectory
-            baseline = returns.mean(dim=1, keepdim=True)  # [B, 1]
-            advantages = returns - baseline  # [B, T]
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            if args.env_group_size > 1:
+                # compute the mean and sdev return per group and normalise
+                advantages = torch.zeros_like(returns)
+                for i in range(0, B, args.env_group_size):
+                    group = returns[i:i + args.env_group_size]
+                    mean = group.mean(dim=(0, 1), keepdim=True)  # [1, 1]
+                    std = group.std(dim=(0, 1), keepdim=True)
+                    group = (group - mean) / (std + 1e-8)
+                    advantages[i:i + args.env_group_size] = group
+            else:
+                baseline = returns.mean(dim=1, keepdim=True)  # [B, 1]
+                advantages = returns - baseline  # [B, T]
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         policy_loss = -(act_log_probs * advantages.detach()).mean()
 
@@ -265,12 +291,7 @@ def main():
             print(f"Model saved at epoch {epoch}")
 
 
-def get_episodes(args, device, environments, net, show=False):
-    observations = [env.reset()[0] for env in environments]
-    observations = torch.tensor(observations, dtype=torch.long).to(device)
-    # add dimension from [batch, K] to [batch, 1, K]
-    observations = observations.unsqueeze(1)
-    net.reset_state()
+def get_episodes(args, device, environments, observations, net, show=False):
     episode_rewards = []
     episode_observations = []
     episode_actions = []
