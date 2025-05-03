@@ -233,9 +233,9 @@ def main():
 
             episode_actions, episode_observations, episode_rewards = get_episodes(args, device, final_environments, final_observations, net)
 
-        episode_observations = torch.cat(episode_observations, dim=1).to(device)  # [batch, seq, K]
-        episode_actions = torch.stack(episode_actions, dim=1).to(device)  # [batch, seq]
-        episode_rewards = torch.tensor(episode_rewards, dtype=torch.float).to(device).permute(1, 0)  # [batch, seq]
+            episode_observations = torch.cat(episode_observations, dim=1).to(device)  # [batch, seq, K]
+            episode_actions = torch.stack(episode_actions, dim=1).to(device)  # [batch, seq]
+            episode_rewards = torch.tensor(episode_rewards, dtype=torch.float).to(device).permute(1, 0)  # [batch, seq]
 
         net.reset_state()
         logits = net(episode_observations)
