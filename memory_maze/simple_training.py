@@ -310,9 +310,13 @@ def get_episodes(args, device, environments, observations, net, show=False):
         results = [env.step(action) for env, action in zip(environments, sampled_actions.cpu().numpy())]
 
         if show:
-            for env in environments[:1]:
-                cv2.imshow(env.name, env.render(mode="image"))
-                cv2.waitKey(50)
+            env = environments[0]
+            last_image = env.render(mode="image")
+            cv2.imshow(env.name, last_image)
+            key = cv2.waitKey(20)
+            if key == ord(' '):
+                break
+
 
         observations, rewards, dones, infos = zip(*results)
 
@@ -326,7 +330,10 @@ def get_episodes(args, device, environments, observations, net, show=False):
             break
 
     if show:
-        cv2.waitKey(500)
+        for i in range(30):
+            image = last_image if i % 2 == 0 else last_image * 0
+            cv2.imshow(env.name, image)
+            cv2.waitKey(20)
     return episode_actions, episode_observations, episode_rewards
 
 

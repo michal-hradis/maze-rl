@@ -40,7 +40,7 @@ class FoodSources:
         self.add_food_sources(maze_grid)
 
     def add_food_sources(self, maze_grid: np.ndarray):
-        empty_tile_coordinates = np.argwhere(maze_grid == 0)
+        empty_tile_coordinates = np.argwhere(maze_grid == TileType.EMPTY.value)
         empty_tile_coordinates = empty_tile_coordinates[np.random.choice(empty_tile_coordinates.shape[0], self.food_source_count, replace=False)]
         for y, x in empty_tile_coordinates:
             self.food_sources.append((y, x, 0, False))
@@ -136,13 +136,13 @@ class GridMazeWorld(gym.Env):
 
     def reset(self):
         self.maze_grid = self.generate_empy_maze_with_borders(self.grid_size)
+        self.maze_grid = self.add_obstacles(self.maze_grid)
         self.food_source = FoodSources(self.maze_grid, self.food_source_count, food_energy=self.food_energy,
                     food_generate_time_average=self.food_generate_time_average, food_generate_time_sdev=1)
 
         empty_tiles = np.argwhere(self.maze_grid == TileType.EMPTY.value)
         self.posX, self.posY = empty_tiles[np.random.choice(empty_tiles.shape[0])]
 
-        self.maze_grid = self.add_obstacles(self.maze_grid)
 
         self.died = False
         self.age = 0
