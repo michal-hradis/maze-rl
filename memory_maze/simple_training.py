@@ -190,7 +190,7 @@ def main():
         food_energy=food_energy,
         initial_energy=initial_energy,
         name=str(i),
-    ) for i in range(args.batch_size * args.env_group_size)]
+    ) for i in range(args.batch_size)]
 
     observation_size = 10
     vocab_size      = 20
@@ -211,7 +211,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net.to(device)
 
-    γ = 0.99  # discount
+    γ = 0.97  # discount
     entropy_coef = 0.01
     max_grad_norm = 1.0
 
