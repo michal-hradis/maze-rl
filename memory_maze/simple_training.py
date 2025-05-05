@@ -2,6 +2,7 @@ import argparse
 import copy
 
 import cv2
+from time import time
 
 import torch
 import torch.nn.functional as F
@@ -17,9 +18,11 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=100000)
     parser.add_argument('--learning-rate', type=float, default=0.0005)
     parser.add_argument("--max-age", type=int, default=50)
-    parser.add_argument("--net-path", type=str, default="policy_epoch_100.pt")
+    parser.add_argument("--net-path", type=str)
     parser.add_argument("--env-group-size", type=int, default=1,
                         help="Number of the same environments - used to reduce variance in training. Advantages are computed per group.")
+    parser.add_argument("--max-epoch", type=int, default=1000000)
+    parser.add_argument("--save-interval", type=int, default=1000)
     return parser.parse_args()
 
 
@@ -178,9 +181,9 @@ def main():
     obstacle_fraction = 0.3
     grid_size = 11
     obstacle_count = (grid_size - 2) * (grid_size - 2) * obstacle_fraction
-    food_source_count = 6
+    food_source_count = 4
     food_energy = 10
-    initial_energy = 20
+    initial_energy = 30
 
     environments = [GridMazeWorld(
         max_age=args.max_age,
@@ -215,9 +218,10 @@ def main():
     entropy_coef = 0.01
     max_grad_norm = 1.0
 
-    save_interval = 100
 
-    for epoch in range(10000):
+    t0 = time()
+    for epoch in range(args.max_epoch):
+        t1 = time()
         with torch.no_grad():
             # reset the environments
             observations = [env.reset()[0] for env in environments]
@@ -284,9 +288,11 @@ def main():
         alive_lengths = (episode_rewards > 0).sum(1).float().mean()
 
         print(f"Epoch: {epoch}, Average reward: {average_rewards:.2f}, Live: {alive_lengths:.2f}, "
-              f"Policy loss: {policy_loss.item():.4f}, Entropy loss: {entropy_loss.item():.4f}")
+              f"Policy loss: {policy_loss.item():.4f}, Entropy loss: {entropy_loss.item():.4f} "
+              f"time: {time() - t1:.2f}s speed: {epoch / (time() - t0):.2f}ep/s "
+              f"trajectories per second: {epoch * args.batch_size * args.env_group_size / (time() - t0):.2f} ")
 
-        if epoch % save_interval == 0:
+        if epoch % args.save_interval == 0:
             torch.save(net.state_dict(), f"policy_epoch_{epoch:06d}.pt")
             print(f"Model saved at epoch {epoch}")
 
@@ -316,7 +322,6 @@ def get_episodes(args, device, environments, observations, net, show=False):
             key = cv2.waitKey(20)
             if key == ord(' '):
                 break
-
 
         observations, rewards, dones, infos = zip(*results)
 
